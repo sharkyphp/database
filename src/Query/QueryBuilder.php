@@ -17,6 +17,7 @@ use RuntimeException;
 use Sharky\Database\Contracts\ConnectionInterface;
 use Sharky\Database\Exceptions\DBException;
 use Sharky\Database\Exceptions\InsecureExecuteException;
+use Sharky\Database\Model;
 
 final class QueryBuilder
 {
@@ -177,12 +178,45 @@ final class QueryBuilder
         return $this->addWhere($conditions, 'OR');
     }
 
+    /**
+     * orWhere 的别名，保持与 1.x / 模型代理命名一致。
+     *
+     * 避免闭包内习惯写 `$qb->whereOr(...)`（QueryBuilder 实例只有 orWhere，
+     * 曾因此报 undefined method）。二者行为完全一致。
+     */
+    public function whereOr(callable | array $conditions): self
+    {
+        return $this->addWhere($conditions, 'OR');
+    }
+
+    /**
+     * 条件成立时才追加 where；条件不成立时等价于不过滤。
+     *
+     * 用于「可能为空的条件」场景，省去调用方先判空：
+     *   $q->whereIf($keyword !== '', ['name', 'like', "%{$keyword}%"])
+     */
+    public function whereIf(mixed $condition, callable | array $clause): self
+    {
+        if ($condition) {
+            return $this->addWhere($clause, 'AND');
+        }
+
+        return $this;
+    }
+
     private function addWhere(callable | array $conditions, string $glue): self
     {
         $glue = strtoupper($glue);
 
         if ($conditions instanceof Closure || is_callable($conditions)) {
             return $this->wrapGroup($conditions, $glue);
+        }
+
+        // 空数组视为「无此条件」：静默忽略，不再抛 Invalid where parameter。
+        // 迁移场景下常写 `$cond ? ['col','op',$cond] : []`，空数组应等价于不过滤，
+        // 与 1.x 行为一致，避免每个可能为空的条件都先判空。
+        if ($conditions === []) {
+            return $this;
         }
 
         foreach ($this->normalizeWhere($conditions) as $condition) {
@@ -1103,26 +1137,54 @@ final class QueryBuilder
 
         }
 
-        $table = $this->resolvePrefix() . ($this->tableMap[$this->table] ?? $this->table);
+        return $this->resolveTableName($this->table) . ($this->alias !== '' ? " AS `{$this->alias}`" : '');
+    }
 
-        if (! preg_match('/^[A-Za-z0-9_$]+$/', $table)) {
+    /**
+     * 解析表名为反引号包裹的标识符。
+     *
+     * 支持两种来源：
+     *   - 普通表名 / tableMap 别名：按当前生效前缀拼接；
+     *   - Model 类名（如 `App\Http\Models\Master\Users`）：自动解析为该模型自身的完整表名
+     *     （含其自身前缀，sharky_ / boss_），不再叠加当前查询前缀——
+     *     消除跨前缀 join 必须手写 `getFullTable()` 或 `crossPrefixQuery()` 的临时方案。
+     */
+    private function resolveTableName(string $table): string
+    {
+        $real = $this->isModelClass($table)
+            ? $this->modelFullTable($table)
+            : $this->resolvePrefix() . ($this->tableMap[$table] ?? $table);
+
+        if (! preg_match('/^[A-Za-z0-9_$]+$/', $real)) {
+            if (str_contains($table, '\\') && class_exists($table)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Illegal table name `%s`: it looks like a class name but is not a Model. ' .
+                    'Pass a Model class (resolved to its table) or the raw table name instead.',
+                    $table
+                ));
+            }
+
             throw new InvalidArgumentException(sprintf('Illegal table name `%s`', $table));
-
         }
 
-        return "`{$table}`" . ($this->alias !== '' ? " AS `{$this->alias}`" : '');
+        return "`{$real}`";
     }
 
     private function resolveTable(string $table): string
     {
-        $real = $this->resolvePrefix() . ($this->tableMap[$table] ?? $table);
+        return $this->resolveTableName($table);
+    }
 
-        if (! preg_match('/^[A-Za-z0-9_$]+$/', $real)) {
-            throw new InvalidArgumentException(sprintf('Illegal table name `%s`', $table));
+    private function isModelClass(string $name): bool
+    {
+        return class_exists($name) && is_subclass_of($name, Model::class);
+    }
 
-        }
-
-        return "`{$real}`";
+    private function modelFullTable(string $class): string
+    {
+        // 模型类自身已含前缀（SharkyModel 锁 sharky_ / 业务模型走配置 boss_），
+        // 不再叠加当前查询前缀，避免跨前缀 join 出现 boss_sharky_users 这类叠加错误。
+        return (new $class())->getFullTable();
     }
 
     /**

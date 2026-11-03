@@ -70,75 +70,89 @@ final class MysqliConnection extends AbstractConnection
 
     public function query(string $sql, array $params = []): array
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () use ($sql, $params) {
+            try {
+                $this->ensureConnection();
 
-            $statement = $this->run($sql, $params);
-            $result    = $statement->get_result();
+                $statement = $this->run($sql, $params);
+                $result    = $statement->get_result();
 
-            if (! $result instanceof mysqli_result) {
-                throw new DBException('The statement does not produce a result set: use execute() instead');
+                if (! $result instanceof mysqli_result) {
+                    throw new DBException('The statement does not produce a result set: use execute() instead');
+                }
+
+                return $this->normalizeRows($result->fetch_all(MYSQLI_ASSOC));
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
             }
-
-            return $this->normalizeRows($result->fetch_all(MYSQLI_ASSOC));
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+        });
     }
 
     public function execute(string $sql, array $params = []): int
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () use ($sql, $params) {
+            try {
+                $this->ensureConnection();
 
-            return $this->run($sql, $params)->affected_rows;
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+                return $this->run($sql, $params)->affected_rows;
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     protected function fetchAllRaw(string $sql): array
     {
-        $this->ensureConnection();
+        return $this->retryable(function () use ($sql) {
+            try {
+                $this->ensureConnection();
 
-        $result = $this->handle->query($sql);
+                $result = $this->handle->query($sql);
 
-        if (! $result instanceof mysqli_result) {
-            return [];
-        }
+                if (! $result instanceof mysqli_result) {
+                    return [];
+                }
 
-        $rows = $this->normalizeRows($result->fetch_all(MYSQLI_ASSOC));
-        $result->free();
+                $rows = $this->normalizeRows($result->fetch_all(MYSQLI_ASSOC));
+                $result->free();
 
-        return $rows;
+                return $rows;
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     public function lastInsertId(): int
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () {
+            try {
+                $this->ensureConnection();
 
-            $id = $this->handle->insert_id;
+                $id = $this->handle->insert_id;
 
-            return is_int($id) ? $id : 0;
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+                return is_int($id) ? $id : 0;
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     public function connectionId(): int
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () {
+            try {
+                $this->ensureConnection();
 
-            $result = $this->handle->query('SELECT CONNECTION_ID()');
-            $row    = $result->fetch_row();
-            $result->free();
+                $result = $this->handle->query('SELECT CONNECTION_ID()');
+                $row    = $result->fetch_row();
+                $result->free();
 
-            return (int) $row[0];
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+                return (int) $row[0];
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     protected function beginTransactionInternal(): bool

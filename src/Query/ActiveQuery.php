@@ -116,6 +116,28 @@ final class ActiveQuery
         return $this;
     }
 
+    /**
+     * orWhere 的别名，保持命名一致（详见 QueryBuilder::whereOr）。
+     */
+    public function whereOr(callable | array $conditions): self
+    {
+        $this->builder->whereOr($conditions);
+
+        return $this;
+    }
+
+    /**
+     * 条件成立时才追加 where；条件不成立时等价于不过滤。
+     *
+     * @see \Sharky\Database\Query\QueryBuilder::whereIf()
+     */
+    public function whereIf(mixed $condition, callable | array $clause): self
+    {
+        $this->builder->whereIf($condition, $clause);
+
+        return $this;
+    }
+
     // ==================================================================
     // JOIN / GROUP / ORDER / LIMIT
     // ==================================================================
@@ -310,6 +332,10 @@ final class ActiveQuery
      */
     public function insert(array | QueryBuilder $data): int
     {
+        if (is_array($data)) {
+            $data = $this->filterColumns($data);
+        }
+
         $this->builder->insert($data);
 
         return (int) $this->builder->run();
@@ -317,6 +343,10 @@ final class ActiveQuery
 
     public function insertIgnore(array | QueryBuilder $data): int
     {
+        if (is_array($data)) {
+            $data = $this->filterColumns($data);
+        }
+
         $this->builder->insertIgnore($data);
 
         return (int) $this->builder->run();
@@ -330,6 +360,8 @@ final class ActiveQuery
      */
     public function upsert(array $data, array $rules): int
     {
+        $data = $this->filterColumns($data);
+
         $this->builder->upsert($data, $rules);
 
         return (int) $this->builder->run();
@@ -342,9 +374,58 @@ final class ActiveQuery
      */
     public function update(array $data): int
     {
+        $data = $this->filterColumns($data);
+
         $this->builder->update($data);
 
         return (int) $this->builder->run();
+    }
+
+    /**
+     * 过滤写入数据：仅保留真实表字段，丢弃不存在的列（避免 Unknown column）。
+     *
+     * - 多行数组：逐行递归过滤。
+     * - 连接不可用 / 无模型类 / 无法取得字段时，原样返回（不遮挡真实错误）。
+     *
+     * @param array<int|string, mixed> $data
+     * @return array<int|string, mixed>
+     */
+    private function filterColumns(array $data): array
+    {
+        if (isset($data[0]) && is_array($data[0])) {
+            return array_map($this->filterColumns(...), $data);
+        }
+
+        if ($this->modelClass === '' || ! class_exists($this->modelClass)) {
+            return $data;
+        }
+
+        try {
+            $fields = (new $this->modelClass())->getFields();
+        } catch (\Throwable) {
+            return $data;
+        }
+
+        if ($fields === []) {
+            return $data;
+        }
+
+        // 大小写不敏感匹配，但保留数据原始键名
+        $byLower = [];
+        foreach ($fields as $field) {
+            $byLower[strtolower((string) $field)] = true;
+        }
+
+        $filtered = [];
+        foreach ($data as $key => $value) {
+            if (is_string($key) && ! isset($byLower[strtolower($key)])) {
+                continue;
+            }
+
+            $filtered[$key] = $value;
+        }
+
+        return $filtered;
     }
 
     /**

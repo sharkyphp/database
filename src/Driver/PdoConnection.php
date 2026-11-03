@@ -74,56 +74,70 @@ final class PdoConnection extends AbstractConnection
 
     public function query(string $sql, array $params = []): array
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () use ($sql, $params) {
+            try {
+                $this->ensureConnection();
 
-            $statement = $this->run($sql, $params);
+                $statement = $this->run($sql, $params);
 
-            return $this->normalizeRows($statement->fetchAll(PDO::FETCH_ASSOC));
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+                return $this->normalizeRows($statement->fetchAll(PDO::FETCH_ASSOC));
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     public function execute(string $sql, array $params = []): int
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () use ($sql, $params) {
+            try {
+                $this->ensureConnection();
 
-            return $this->run($sql, $params)->rowCount();
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+                return $this->run($sql, $params)->rowCount();
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     protected function fetchAllRaw(string $sql): array
     {
-        $this->ensureConnection();
+        return $this->retryable(function () use ($sql) {
+            try {
+                $this->ensureConnection();
 
-        return $this->normalizeRows($this->handle->query($sql)->fetchAll(PDO::FETCH_ASSOC));
+                return $this->normalizeRows($this->handle->query($sql)->fetchAll(PDO::FETCH_ASSOC));
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     public function lastInsertId(): int
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () {
+            try {
+                $this->ensureConnection();
 
-            // PDO::lastInsertId() 在 PHP 中始终返回字符串（无自增时是 "0"），必须显式转 int
-            return (int) $this->handle->lastInsertId();
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+                // PDO::lastInsertId() 在 PHP 中始终返回字符串（无自增时是 "0"），必须显式转 int
+                return (int) $this->handle->lastInsertId();
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     public function connectionId(): int
     {
-        try {
-            $this->ensureConnection();
+        return $this->retryable(function () {
+            try {
+                $this->ensureConnection();
 
-            return (int) $this->handle->query('SELECT CONNECTION_ID()')->fetchColumn();
-        } catch (Throwable $th) {
-            throw DBException::transform($th);
-        }
+                return (int) $this->handle->query('SELECT CONNECTION_ID()')->fetchColumn();
+            } catch (Throwable $th) {
+                throw DBException::transform($th);
+            }
+        });
     }
 
     protected function beginTransactionInternal(): bool

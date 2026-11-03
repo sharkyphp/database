@@ -37,8 +37,15 @@ final class Database
         $this->config = $config;
     }
 
-    public function connect(string $connect): ConnectionInterface
+    public function connect(?string $connect = null): ConnectionInterface
     {
+        if ($connect === null) {
+            $connect = array_key_first($this->config['hosts'] ?? []);
+            if ($connect === null) {
+                throw new RuntimeException('Database hosts configuration is empty, cannot resolve default connection');
+            }
+        }
+
         if (array_key_exists($connect, $this->connects)) {
             return $this->connects[$connect];
         }
@@ -131,10 +138,6 @@ final class Database
      */
     private function defaultConnect(): ConnectionInterface
     {
-        $firstKey = array_key_first($this->config['hosts'] ?? []);
-        if (null === $firstKey) {
-            throw new RuntimeException('Database hosts configuration is empty, cannot resolve default connection');
-        }
-        return $this->connect($firstKey);
+        return $this->connect();
     }
 }

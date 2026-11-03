@@ -219,18 +219,20 @@ abstract class Model implements ArrayAccess, JsonSerializable, ArrayableInterfac
 
     private function filterFillable(array $attributes): array
     {
-        if ($this->fillable === []) {
-            // 未配置白名单：过滤掉表里不存在的字段（连接不可用时跳过过滤）
-            try {
-                $fields = array_flip($this->getFields());
-            } catch (\Throwable) {
-                return $attributes;
-            }
-
-            return array_intersect_key($attributes, $fields);
+        // 先按批量赋值白名单裁剪（若配置了白名单）
+        if ($this->fillable !== []) {
+            $attributes = array_intersect_key($attributes, array_flip($this->fillable));
         }
 
-        return array_intersect_key($attributes, array_flip($this->fillable));
+        // 再按真实表字段裁剪：过滤掉表里不存在的字段，避免把非法列写进 SQL。
+        // 连接不可用时跳过该步，避免误伤（保持旧行为）。
+        try {
+            $fields = array_flip($this->getFields());
+        } catch (\Throwable) {
+            return $attributes;
+        }
+
+        return array_intersect_key($attributes, $fields);
     }
 
     public function getAttribute(string $key): mixed

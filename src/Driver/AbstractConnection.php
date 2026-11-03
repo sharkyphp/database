@@ -112,6 +112,61 @@ abstract class AbstractConnection implements ConnectionInterface
         }
     }
 
+    /**
+     * 带「长连接失效自动重连」地执行一次数据库操作。
+     *
+     * 首次执行若因连接断开类错误（MySQL server has gone away / Lost connection /
+     * 通信链路失败等）失败，则关闭已失效句柄、重建连接并重试一次；第二次若仍失败
+     * 则直接抛出，不会死循环。
+     *
+     * 处于事务中（transactionLevel > 0）时不做重连：连接断开意味着事务已丢失，
+     * 静默重连会导致后续语句在「无事务」的新连接上执行，破坏原子性，应直接抛出。
+     *
+     * @template T
+     * @param callable(): T $operation
+     * @return T
+     */
+    protected function retryable(callable $operation): mixed
+    {
+        try {
+            return $operation();
+        } catch (DBException $e) {
+            if ($this->transactionLevel === 0 && $this->isConnectionLost($e)) {
+                $this->close();
+                $this->ensureConnection();
+
+                // 二次重试在 try 之外：若仍失败直接抛出，避免死循环
+                return $operation();
+            }
+
+            throw $e;
+        }
+    }
+
+    /**
+     * 判断异常是否由底层连接断开引起（此时重连可恢复）。
+     */
+    protected function isConnectionLost(DBException $e): bool
+    {
+        static $lostCodes = ['2002', '2006', '2013', '2055'];
+
+        if (in_array((string) $e->getCode(), $lostCodes, true)) {
+            return true;
+        }
+
+        // SQLSTATE 08S01 = 通信链路失败，明确属于连接问题
+        if ($e->getSqlState() === '08S01') {
+            return true;
+        }
+
+        $msg = strtolower($e->getMessage());
+
+        return str_contains($msg, 'server has gone away')
+            || str_contains($msg, 'lost connection')
+            || str_contains($msg, 'broken pipe')
+            || str_contains($msg, 'connection reset');
+    }
+
     public function close(): void
     {
         if ($this->handle === null) {
